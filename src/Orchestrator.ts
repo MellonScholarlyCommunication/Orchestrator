@@ -1,46 +1,42 @@
 import { NotificationHandler } from "@dexagod/ldn-agent"
-import { Fetcher } from "@dexagod/rdf-retrieval"
-
+import { getResourceAsStore } from "@dexagod/rdf-retrieval"
+import ns from './NameSpaces';
+import * as N3 from 'n3'
+import * as f from "@dexagod/rdf-retrieval"
 
 export class Orchestrator {
   inbox: string;
   nh: NotificationHandler;
-  fetcher: Fetcher;
-  options: {uname: string, pass: string, idp: string, policiesUrl: string } ;
+  options: {uname: string, pass: string, idp: string} ;
   policies: any[] = [];
 
-  constructor(inbox: string, options: {uname: string, pass: string, idp: string, policiesUrl: string }){
+  constructor(inbox: string, options: {uname: string, pass: string, idp: string}){
     this.options = options;
     this.inbox = inbox;
     this.nh = new NotificationHandler({username: this.options.uname, password: this.options.pass, idp: this.options.idp})
-    this.fetcher = new Fetcher()
-    this.initialize()
   }
 
-  async initialize() {
-    this.fetcher.getResourceAsStore(this.options.policiesUrl)
-    this.policies
-
-    this.run();
-
-  }
-
-  async run(policies: string[]) {
-    console.log('Initialization complete, orchestrator service running.')
+  async run(policyDocuments: string[]) {
     // Fetch policies
+    let policies : Policy[] = [];
+    for (const policyDocument of policyDocuments || []) {
+      policies = policies.concat(await this.retrievePolicies(policyDocument))
+    }
 
-    
+    console.log(`Initialization complete, orchestrator service running for inbox ${this.inbox}.`)
 
-    // Extract filters from policies
-    const filters: any[] = [];
-
-    // Watch notifications
+    // Login to inbox
+    await this.nh.login();
+    // Watch inbox
     const asyncIterator = await this.nh.watchNotifications({inbox: this.inbox} )
 
     asyncIterator.on('readable', () => {
       let notification;
+      // eslint-disable-next-line no-cond-assign
       while (notification = asyncIterator.read()) {
         const quads = notification.quads
+        
+        // convert quads to 
 
         // Match filters
 
@@ -57,11 +53,50 @@ export class Orchestrator {
 
   }
 
-  async processPolicy(policy: any) {
-     const matchClause = policy['https://example/com#match']
-     const triggers = policy['https://example/com#match']
-  }
+  async retrievePolicies(policyDocumentURI: string) : Promise<Policy[]> {
+    if(!policyDocumentURI) return [];
 
-  
+    const store = await getResourceAsStore(policyDocumentURI)
+    const policyURIs = store.getQuads(null, ns.rdf('type'), ns.pol('Policy'), null).map(quad => quad.subject.id)
+    
+    let policies : Policy[] = policyURIs.map(uri => { return ( 
+      {
+        condition: store.getQuads(uri, ns.ex('condition'), null, null).map(quad => quad.object.id),
+        actions: store.getQuads(uri, ns.ex('action'), null, null).map(quad => quad.object.id),
+      }
+    )})
+
+    // Check for extended policies
+    let extensions = store.getQuads(policyDocumentURI, ns.pol('extends'), null, null).map(quad => quad.object.id)
+    extensions = extensions.concat( store.getQuads(null, ns.pol('extends'), policyDocumentURI, null).map(quad => quad.subject.id) )
+
+    for (const extension of extensions) {
+      policies = policies.concat(await this.retrievePolicies(extension))
+    }
+    return policies;
+  }
 }
 
+
+const getFullItemFromStore = (store: N3.Store , uri: string) => {
+  const item : any = {"@id": uri}
+  store.getQuads(uri, null, null, null).map(quad => { item[quad.predicate.id] = this.getFullItemFromStore(store, quad.object.id) })
+  return item;
+}
+
+/**
+ * 
+ */
+export interface Policy {
+  condition: string[],
+  actions: string[],
+}
+
+
+
+
+
+export interface Policy {
+  condition: string,
+  actions: string,
+}
